@@ -18,6 +18,11 @@ compile_commands.json
 .vscode/
 *.iml
 
+# Harness
+harness/certs/
+harness/.venv/
+__pycache__/
+
 # Benchmark artifacts
 *.hdr
 data/*.itch
