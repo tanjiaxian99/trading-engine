@@ -272,7 +272,9 @@ class Exchange:
         ws = web.WebSocketResponse(compress=False, heartbeat=heartbeat)
         await ws.prepare(request)
         tls = request.transport.get_extra_info("ssl_object")
-        log.info("%s connected over %s %s", request.path, tls.version(), tls.cipher()[0])
+        peer_port = request.transport.get_extra_info("peername")[1]
+        log.info("%s connected from port %d over %s %s", request.path, peer_port, tls.version(),
+                 tls.cipher()[0])
         return ws
 
     async def private_ws(self, request):
@@ -359,6 +361,17 @@ class Exchange:
             log.info("%s disconnected", request.path)
         return ws
 
+    # Keeps the engine's receive, TLS and send path busy between ticks, the pongs it sends back
+    # are below pair_capture.py's MIN_MESSAGE_LEN
+    async def ping_engine(self, interval):
+        while True:
+            await asyncio.sleep(interval)
+            for ws in (*self.private_sockets, *self.sbe_subscribers, *self.books_subscribers):
+                try:
+                    await ws.ping()
+                except ConnectionResetError:
+                    pass
+
     def engine_connected(self):
         return bool(self.private_sockets) and bool(self.books_subscribers or self.sbe_subscribers)
 
@@ -434,14 +447,17 @@ async def main(args):
         await web.TCPSite(runner, "0.0.0.0", port, ssl_context=ssl_context).start()
     log.info("Listening on %d (REST) and %d (WS)", REST_PORT, WS_PORT)
 
-    reporter = asyncio.create_task(exchange.report())
+    tasks = [asyncio.create_task(exchange.report())]
+    if args.ping_interval:
+        tasks.append(asyncio.create_task(exchange.ping_engine(args.ping_interval)))
     try:
         await exchange.run_feed(args)
         log.info("Feed finished: %s", exchange.summary())
         # Keep acking orders until the engine is stopped
         await asyncio.Event().wait()
     finally:
-        reporter.cancel()
+        for task in tasks:
+            task.cancel()
         await runner.cleanup()
 
 
@@ -454,6 +470,8 @@ if __name__ == "__main__":
     parser.add_argument("--count", type=int, default=0, help="price moves to send, 0 for no limit")
     parser.add_argument("--warmup", type=float, default=2.0)
     parser.add_argument("--seed", type=int, default=1)
+    parser.add_argument("--ping-interval", type=float, default=0.0,
+                        help="seconds between WebSocket pings to the engine, 0 to disable")
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     try:
         asyncio.run(main(parser.parse_args()))
