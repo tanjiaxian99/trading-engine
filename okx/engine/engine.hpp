@@ -44,6 +44,7 @@ private:
 
     void ScheduleQuoterTimer();
     void ScheduleStatsLogTimer();
+    void ScheduleWarmTimer();
     void SetUpShutdownSignals();
 
     RestClient& rest_client_;
@@ -66,5 +67,6 @@ private:
 
     asio::steady_timer quoter_timer_;
     asio::steady_timer stats_log_timer_;
+    asio::steady_timer warm_timer_;
     asio::signal_set shutdown_signals_;
 };

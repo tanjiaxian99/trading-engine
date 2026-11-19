@@ -35,6 +35,7 @@ constexpr RateLimit kCancelRateLimit{.capacity = 60, .window = std::chrono::seco
 constexpr RateLimit kAmendRateLimit{.capacity = 60, .window = std::chrono::seconds(2)};
 constexpr auto kQuoterTimerInterval = std::chrono::milliseconds(500);
 constexpr auto kStatsLogInterval = std::chrono::minutes(5);
+constexpr auto kWarmInterval = std::chrono::milliseconds(10);
 
 void LogOrderEvent(const OrderEvent& event) {
     Log.Info(
@@ -70,6 +71,7 @@ Engine::Engine(MarketDataMode market_data_mode, RestClient& rest_client, const O
       order_timeout_monitor_(io_context_, order_store_, rest_client_, auth_),
       quoter_timer_(io_context_),
       stats_log_timer_(io_context_),
+      warm_timer_(io_context_),
       shutdown_signals_(io_context_, SIGINT, SIGTERM) {
     Log.Info("Market data mode: {}", market_data_->Name());
 
@@ -91,6 +93,7 @@ Engine::Engine(MarketDataMode market_data_mode, RestClient& rest_client, const O
     order_timeout_monitor_.Start();
     ScheduleQuoterTimer();
     ScheduleStatsLogTimer();
+    ScheduleWarmTimer();
     SetUpShutdownSignals();
 }
 
@@ -123,6 +126,19 @@ void Engine::ScheduleStatsLogTimer() {
         }
         tick_to_trade_stats_.LogSummary();
         ScheduleStatsLogTimer();
+    });
+}
+
+void Engine::ScheduleWarmTimer() {
+    warm_timer_.expires_after(kWarmInterval);
+    warm_timer_.async_wait([this](const boost::system::error_code& ec) {
+        if (ec) {
+            return;
+        }
+        if (const OrderBook* book = market_data_->Warm()) {
+            quoter_.Warm(*book);
+        }
+        ScheduleWarmTimer();
     });
 }
 

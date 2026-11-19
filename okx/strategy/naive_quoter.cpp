@@ -6,6 +6,7 @@
 #include <utility>
 
 #include "log/async_logger.hpp"
+#include "net/websocket_frame.hpp"
 #include "okx/common/okx_constants.hpp"
 #include "okx/orders/order_types.hpp"
 #include "okx/orders/ws_orders.hpp"
@@ -108,6 +109,33 @@ void NaiveQuoter::Requote(double mid, TickToTradeTrace trace) {
     ReplaceSide(ask_cl_ord_id_, kSell, ask_px, trace);
     ws_client_.EndBatch();
     last_quoted_mid_ = mid;
+}
+
+void NaiveQuoter::Warm(const OrderBook& book) {
+    const auto best_bid = book.BestBid();
+    const auto best_ask = book.BestAsk();
+    if (!best_bid || !best_ask) {
+        return;
+    }
+
+    const auto [bid_px, ask_px] = ComputeQuotePrices((*best_bid + *best_ask) / 2.0);
+    WarmSide(bid_cl_ord_id_, bid_px);
+    WarmSide(ask_cl_ord_id_, ask_px);
+}
+
+void NaiveQuoter::WarmSide(const std::optional<std::string>& cl_ord_id, double px) {
+    if (!cl_ord_id) {
+        return;
+    }
+
+    const Order* order = order_store_.FindByClOrdId(*cl_ord_id);
+    if (!order || order->OrdId().empty()) {
+        return;
+    }
+
+    const WsOrderRequest amend =
+        BuildWsAmendOrderMessage(inst_id_code_, order->OrdId(), FormatPrice(px), sz_);
+    [[maybe_unused]] const std::string frame = EncodeFrame(WebSocketOpcode::kText, amend.message);
 }
 
 std::pair<double, double> NaiveQuoter::ComputeQuotePrices(double mid) const {

@@ -57,6 +57,8 @@ void JsonBookSource::OnMessage(std::string_view message) {
                                            .book_consistent_ticks = book_consistent_ticks,
                                        });
             }
+            warm_base_ = std::exchange(previous_book_, book_);
+            last_message_.assign(message);
             break;
         }
         case BookMessageResult::kGapDetected:
@@ -68,4 +70,16 @@ void JsonBookSource::OnMessage(std::string_view message) {
             Log.Debug("WS message is ignored: {}", message);
             break;
     }
+}
+
+const OrderBook* JsonBookSource::Warm() {
+    if (!warm_base_.HasSnapshot()) {
+        return nullptr;
+    }
+
+    warm_book_ = warm_base_;
+    if (ApplyBookMessage(last_message_, warm_book_) != BookMessageResult::kApplied) {
+        return nullptr;
+    }
+    return &warm_book_;
 }

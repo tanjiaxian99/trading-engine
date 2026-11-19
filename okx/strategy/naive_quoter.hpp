@@ -22,6 +22,7 @@ public:
     void OnCancel(const OrderEvent& event) override;
     void OnTimer() override;
     void OnOrderRemoved(std::string_view cl_ord_id);
+    void Warm(const OrderBook& book);
 
 private:
     void Requote(double mid, TickToTradeTrace trace);
@@ -36,6 +37,7 @@ private:
     [[nodiscard]] std::string FormatPrice(double px) const;
     [[nodiscard]] std::pair<double, double> ComputeQuotePrices(double mid) const;
     [[nodiscard]] bool OwnsOrder(std::string_view cl_ord_id) const;
+    void WarmSide(const std::optional<std::string>& cl_ord_id, double px);
 
     OkxWsClient& ws_client_;
     OrderStore& order_store_;

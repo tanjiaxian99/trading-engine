@@ -14,6 +14,7 @@ public:
     void SetOnBookUpdate(BookHandler handler) override;
     void Start() override;
     [[nodiscard]] std::string_view Name() const override;
+    [[nodiscard]] const OrderBook* Warm() override;
 
 private:
     void OnMessage(std::string_view message);
@@ -24,4 +25,8 @@ private:
     std::string subscribe_msg_;
     std::string unsubscribe_msg_;
     std::string resubscribe_msg_;
+    std::string last_message_;
+    OrderBook warm_base_;
+    OrderBook previous_book_;
+    OrderBook warm_book_;
 };

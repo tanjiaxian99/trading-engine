@@ -66,4 +66,17 @@ void SbeBboSource::OnMessage(std::string_view message) {
                                    .book_consistent_ticks = book_consistent_ticks,
                                });
     }
+    last_message_.assign(message);
+}
+
+const OrderBook* SbeBboSource::Warm() {
+    const auto bbo = sbe::DecodeBboTbt(last_message_);
+    if (!bbo) {
+        return nullptr;
+    }
+    warm_book_.BeginSnapshot();
+    warm_book_.SetBid(bbo->bid_px, bbo->bid_sz);
+    warm_book_.SetAsk(bbo->ask_px, bbo->ask_sz);
+    warm_book_.SetSeqId(bbo->seq_id);
+    return &warm_book_;
 }

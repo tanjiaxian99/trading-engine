@@ -27,6 +27,9 @@ public:
     virtual void SetOnBookUpdate(BookHandler handler) = 0;
     virtual void Start() = 0;
     [[nodiscard]] virtual std::string_view Name() const = 0;
+    [[nodiscard]] virtual const OrderBook* Warm() {
+        return nullptr;
+    }
 };
 
 std::unique_ptr<MarketDataSource> MakeMarketDataSource(MarketDataMode mode,
