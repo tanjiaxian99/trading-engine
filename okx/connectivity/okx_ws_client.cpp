@@ -17,6 +17,7 @@ namespace {
 constexpr auto kBaseBackoff = std::chrono::milliseconds(500);
 constexpr auto kMaxBackoff = std::chrono::milliseconds(30'000);
 constexpr auto kHeartbeatInterval = std::chrono::seconds(15);
+constexpr auto kWarmPingInterval = std::chrono::milliseconds(20);
 
 // The backoff is a random value with a cap so a burst of clients reconnecting after
 // the same outage doesn't retry in lockstep
@@ -40,7 +41,8 @@ OkxWsClient::OkxWsClient(asio::io_context& io_context, std::string host, std::st
       auth_(std::move(auth)),
       kind_(kind),
       reconnect_timer_(io_context_),
-      heartbeat_timer_(io_context_) {}
+      heartbeat_timer_(io_context_),
+      warm_ping_timer_(io_context_) {}
 
 void OkxWsClient::SetOnConnected(ConnectHandler handler) {
     on_connected_ = std::move(handler);
@@ -87,6 +89,7 @@ void OkxWsClient::Connect() {
             on_connected_();
         }
         ScheduleHeartbeat();
+        ScheduleWarmPing();
         ReadLoop();
     } catch (const std::exception& e) {
         Log.Warn("OKX WebSocket connect failed: {}", e.what());
@@ -98,6 +101,7 @@ void OkxWsClient::ScheduleReconnect() {
     transport_.reset();
     authenticated_ = false;
     heartbeat_timer_.cancel();
+    warm_ping_timer_.cancel();
     tx_ring_.Reset();
     write_in_flight_ = false;
 
@@ -230,6 +234,17 @@ void OkxWsClient::ScheduleHeartbeat() {
         }
         WriteRaw(EncodeOkxPing());
         ScheduleHeartbeat();
+    });
+}
+
+void OkxWsClient::ScheduleWarmPing() {
+    warm_ping_timer_.expires_after(kWarmPingInterval);
+    warm_ping_timer_.async_wait([this](const boost::system::error_code& ec) {
+        if (ec) {
+            return;
+        }
+        WriteRaw(EncodeFrame(WebSocketOpcode::kPing, {}));
+        ScheduleWarmPing();
     });
 }
 

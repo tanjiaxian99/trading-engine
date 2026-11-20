@@ -65,6 +65,7 @@ private:
     void WriteRaw(const std::string& frame, std::optional<TickToTradeTrace> trace = std::nullopt);
     void StartWrite();
     void ScheduleHeartbeat();
+    g void ScheduleWarmPing();
     void SendLogin();
 
     asio::io_context& io_context_;
@@ -78,6 +79,7 @@ private:
     std::optional<Transport> transport_;
     asio::steady_timer reconnect_timer_;
     asio::steady_timer heartbeat_timer_;
+    asio::steady_timer warm_ping_timer_;
     int reconnect_attempt_ = 0;
 
     std::array<char, kReadChunkSize> read_chunk_{};
