@@ -65,7 +65,7 @@ private:
     void WriteRaw(const std::string& frame, std::optional<TickToTradeTrace> trace = std::nullopt);
     void StartWrite();
     void ScheduleHeartbeat();
-    g void ScheduleWarmPing();
+    void ScheduleWarmPing();
     void SendLogin();
 
     asio::io_context& io_context_;

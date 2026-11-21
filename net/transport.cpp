@@ -1,6 +1,9 @@
 #include "net/transport.hpp"
 
+#include <netinet/in.h>
+#include <netinet/tcp.h>
 #include <openssl/ssl.h>
+#include <sys/socket.h>
 
 #include <stdexcept>
 #include <utility>
@@ -61,4 +64,14 @@ void Transport::AsyncWrite(
     asio::const_buffer buffer,
     std::function<void(const boost::system::error_code&, std::size_t)> handler) {
     asio::async_write(stream_, buffer, std::move(handler));
+}
+
+void Transport::FlushAck() {
+#ifdef __linux__
+    const int fd = stream_.next_layer().native_handle();
+    const int on = 1;
+    const int off = 0;
+    setsockopt(fd, IPPROTO_TCP, TCP_QUICKACK, &on, sizeof(on));
+    setsockopt(fd, IPPROTO_TCP, TCP_QUICKACK, &off, sizeof(off));
+#endif
 }

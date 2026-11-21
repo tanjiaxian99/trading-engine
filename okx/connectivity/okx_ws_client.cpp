@@ -137,6 +137,7 @@ void OkxWsClient::ReadLoop() {
                                       HandleFrame(*frame);
                                       rx_buffer_.erase(0, frame->total_size);
                                   }
+                                  transport_->FlushAck();
                                   ReadLoop();
                               });
 }

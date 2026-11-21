@@ -18,6 +18,7 @@ public:
                        std::function<void(const boost::system::error_code&, std::size_t)> handler);
     void AsyncWrite(asio::const_buffer buffer,
                     std::function<void(const boost::system::error_code&, std::size_t)> handler);
+    void FlushAck();
 
 private:
     asio::io_context& io_context_;
