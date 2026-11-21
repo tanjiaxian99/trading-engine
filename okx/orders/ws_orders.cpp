@@ -1,5 +1,7 @@
 #include "okx/orders/ws_orders.hpp"
 
+#include <array>
+#include <charconv>
 #include <format>
 #include <stdexcept>
 
@@ -12,9 +14,6 @@ constexpr std::string_view kOrderArgFormat =
 constexpr std::string_view kOrderMessageFormat = R"({{"id":"{}","op":"order","args":[{}]}})";
 constexpr std::string_view kCancelOrderMessageFormat =
     R"({{"id":"{}","op":"cancel-order","args":[{{"instIdCode":{},"ordId":"{}"}}]}})";
-constexpr std::string_view kAmendOrderMessageFormat =
-    R"({{"id":"{}","op":"amend-order","args":[{{"instIdCode":{},"ordId":"{}","newPx":"{}",)"
-    R"("newSz":"{}"}}]}})";
 constexpr std::string_view kBatchOrdersMessageFormat =
     R"({{"id":"{}","op":"batch-orders","args":[{}]}})";
 
@@ -41,10 +40,27 @@ WsOrderRequest BuildWsCancelOrderMessage(long long inst_id_code, std::string_vie
 
 WsOrderRequest BuildWsAmendOrderMessage(long long inst_id_code, std::string_view ord_id,
                                         std::string_view new_px, std::string_view new_sz) {
-    const std::string id = GenerateId();
-    std::string message =
-        std::format(kAmendOrderMessageFormat, id, inst_id_code, ord_id, new_px, new_sz);
-    return WsOrderRequest{.id = id, .message = std::move(message)};
+    std::array<char, 20> code_buf{};
+    const auto code_end =
+        std::to_chars(code_buf.data(), code_buf.data() + code_buf.size(), inst_id_code).ptr;
+    const std::string_view code(code_buf.data(), code_end);
+
+    WsOrderRequest request{.id = GenerateId(), .message = {}};
+    std::string& message = request.message;
+    message.reserve(128 + request.id.size() + code.size() + ord_id.size() + new_px.size() +
+                    new_sz.size());
+    message += R"({"id":")";
+    message += request.id;
+    message += R"(","op":"amend-order","args":[{"instIdCode":)";
+    message += code;
+    message += R"(,"ordId":")";
+    message += ord_id;
+    message += R"(","newPx":")";
+    message += new_px;
+    message += R"(","newSz":")";
+    message += new_sz;
+    message += R"("}]})";
+    return request;
 }
 
 WsBatchOrderRequest BuildWsBatchOrdersMessage(const std::vector<OrderRequest>& requests) {

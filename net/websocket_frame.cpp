@@ -1,9 +1,9 @@
 #include "net/websocket_frame.hpp"
 
-#include <openssl/rand.h>
-
 #include <array>
 #include <cstddef>
+#include <cstring>
+#include <random>
 #include <stdexcept>
 
 namespace {
@@ -52,10 +52,13 @@ void AppendBigEndian64(std::string& out, std::uint64_t value) {
 }
 
 std::array<std::uint8_t, kMaskKeyBytes> GenerateMaskingKey() {
+    thread_local std::uint64_t state = (std::uint64_t{std::random_device{}()} << 32) | 1;
+    state ^= state << 13;
+    state ^= state >> 7;
+    state ^= state << 17;
+
     std::array<std::uint8_t, kMaskKeyBytes> key{};
-    if (RAND_bytes(key.data(), key.size()) != 1) {
-        throw std::runtime_error("Failed to generate WebSocket frame masking key");
-    }
+    std::memcpy(key.data(), &state, key.size());
     return key;
 }
 }  // namespace
@@ -127,7 +130,12 @@ std::optional<WebSocketFrame> DecodeFrame(std::string_view data) {
 
 std::string EncodeFrame(WebSocketOpcode opcode, std::string_view payload) {
     std::string frame;
+    EncodeFrame(opcode, payload, frame);
+    return frame;
+}
 
+void EncodeFrame(WebSocketOpcode opcode, std::string_view payload, std::string& frame) {
+    frame.clear();
     frame.push_back(static_cast<char>(kFinBit | static_cast<std::uint8_t>(opcode)));
 
     const std::uint64_t payload_length = payload.size();
@@ -146,10 +154,11 @@ std::string EncodeFrame(WebSocketOpcode opcode, std::string_view payload) {
         frame.push_back(static_cast<char>(key_byte));
     }
 
+    const std::size_t payload_offset = frame.size();
+    frame.resize(payload_offset + payload.size());
+    char* masked = frame.data() + payload_offset;
     for (std::size_t i = 0; i < payload.size(); i++) {
         const auto original = static_cast<std::uint8_t>(payload[i]);
-        frame.push_back(static_cast<char>(original ^ mask_key[i % kMaskKeyBytes]));
+        masked[i] = static_cast<char>(original ^ mask_key[i % kMaskKeyBytes]);
     }
-
-    return frame;
 }

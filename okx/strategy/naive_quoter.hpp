@@ -47,6 +47,7 @@ private:
     std::string sz_;
     double tick_sz_;
     int tick_decimal_places_;
+    long long tick_units_;
     double quote_bps_;
     double requote_threshold_bps_;
 

@@ -61,7 +61,8 @@ void OkxWsClient::Start() {
 }
 
 void OkxWsClient::Send(std::string_view payload, std::optional<TickToTradeTrace> trace) {
-    WriteRaw(EncodeFrame(WebSocketOpcode::kText, payload), trace);
+    EncodeFrame(WebSocketOpcode::kText, payload, tx_frame_);
+    WriteRaw(tx_frame_, trace);
 }
 
 void OkxWsClient::Connect() {
@@ -196,15 +197,6 @@ void OkxWsClient::StartWrite() {
     }
 
     const std::uint64_t send_ticks = perf::ReadCounter();
-    while (!pending_send_traces_.empty()) {
-        TickToTradeTrace trace = pending_send_traces_.front();
-        pending_send_traces_.pop_front();
-        trace.send_ticks = send_ticks;
-        if (on_trace_resolved_) {
-            on_trace_resolved_(trace);
-        }
-    }
-
     write_in_flight_ = true;
     auto on_write = [this](const boost::system::error_code& ec, std::size_t bytes_written) {
         if (ec) {
@@ -220,6 +212,15 @@ void OkxWsClient::StartWrite() {
         }
     };
     transport_->AsyncWrite(tx_ring_.ContiguousReadableRegion(), std::move(on_write));
+
+    while (!pending_send_traces_.empty()) {
+        TickToTradeTrace trace = pending_send_traces_.front();
+        pending_send_traces_.pop_front();
+        trace.send_ticks = send_ticks;
+        if (on_trace_resolved_) {
+            on_trace_resolved_(trace);
+        }
+    }
 }
 
 void OkxWsClient::ScheduleHeartbeat() {

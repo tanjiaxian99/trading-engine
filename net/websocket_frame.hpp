@@ -33,3 +33,5 @@ std::optional<WebSocketFrameHeader> DecodeFrameHeader(std::string_view data);
 std::optional<WebSocketFrame> DecodeFrame(std::string_view data);
 
 std::string EncodeFrame(WebSocketOpcode opcode, std::string_view payload);
+
+void EncodeFrame(WebSocketOpcode opcode, std::string_view payload, std::string& frame);

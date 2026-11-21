@@ -86,6 +86,7 @@ private:
     std::string rx_buffer_;
     std::uint64_t last_message_arrival_ticks_ = 0;
     std::uint64_t last_message_decoded_ticks_ = 0;
+    std::string tx_frame_;
     RingBuffer<kTxRingCapacity> tx_ring_;
     bool write_in_flight_ = false;
     bool batching_ = false;

@@ -37,6 +37,7 @@ NaiveQuoter::NaiveQuoter(OkxWsClient& ws_client, OrderStore& order_store,
       sz_(std::move(sz)),
       tick_sz_(json::ParseDouble(tick_sz)),
       tick_decimal_places_(DecimalPlaces(tick_sz)),
+      tick_units_(std::llround(tick_sz_ * std::pow(10.0, tick_decimal_places_))),
       quote_bps_(quote_bps),
       requote_threshold_bps_(requote_threshold_bps) {}
 
@@ -234,11 +235,27 @@ void NaiveQuoter::TraceMessageBuilt(std::optional<TickToTradeTrace>& trace) {
 }
 
 std::string NaiveQuoter::FormatPrice(double px) const {
-    const double rounded = std::round(px / tick_sz_) * tick_sz_;
-    std::array<char, 32> buf{};
-    const auto result = std::to_chars(buf.data(), buf.data() + buf.size(), rounded,
-                                      std::chars_format::fixed, tick_decimal_places_);
-    return {buf.data(), result.ptr};
+    const long long units = std::llround(px / tick_sz_) * tick_units_;
+    std::array<char, 24> buf{};
+    const auto end = std::to_chars(buf.data(), buf.data() + buf.size(), units).ptr;
+    const std::string_view digits(buf.data(), end);
+
+    const auto places = static_cast<std::size_t>(tick_decimal_places_);
+    if (places == 0) {
+        return std::string(digits);
+    }
+
+    if (digits.size() <= places) {
+        std::string formatted = "0.";
+        formatted.append(places - digits.size(), '0');
+        formatted += digits;
+        return formatted;
+    }
+
+    std::string formatted(digits.substr(0, digits.size() - places));
+    formatted += '.';
+    formatted += digits.substr(digits.size() - places);
+    return formatted;
 }
 
 bool NaiveQuoter::OwnsOrder(std::string_view cl_ord_id) const {

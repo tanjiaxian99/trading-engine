@@ -77,6 +77,8 @@ target_compile_options(trading_engine PRIVATE
         -Wall -Wextra -Wpedantic
 )
 
+target_compile_definitions(trading_engine PRIVATE BOOST_ASIO_DISABLE_TIMERFD)
+
 target_link_libraries(trading_engine PRIVATE
         OpenSSL::SSL
         OpenSSL::Crypto

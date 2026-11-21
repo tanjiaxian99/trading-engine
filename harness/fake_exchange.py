@@ -400,15 +400,16 @@ class Exchange:
                 await asyncio.sleep(args.interval)
             return
 
+        move_offset = 0.5 / args.rate if args.rate else 0.0
         loop = asyncio.get_running_loop()
         start = loop.time()
-        next_move = start + args.interval
+        next_move = start + args.interval + move_offset
         churn_sent = 0
         while not args.count or self.moves < args.count:
             if not self.engine_connected():
                 await self.wait_for_engine(args)
                 start = loop.time()
-                next_move = start + args.interval
+                next_move = start + args.interval + move_offset
                 churn_sent = 0
             now = loop.time()
             due = int((now - start) * args.rate) - churn_sent
