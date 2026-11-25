@@ -191,6 +191,46 @@ A few things worth noting about this table:
   so each stage gets its own histogram rather than one combined statistic. This is why stage
   percentiles don't sum to the total's.
 
+### Reproducing
+
+The benchmarks need two Linux hosts on the same subnet: an engine host with an NVIDIA ConnectX NIC,
+and an exchange host for the harness that the engine host can reach over SSH.
+
+1. On the exchange host, install the harness and generate its TLS certificates:
+
+   ```sh
+   harness/setup_exchange.sh
+   ```
+
+2. On the engine host, copy `harness/certs/ca.crt` over from the exchange host, point OKX's
+   hostnames at the exchange, isolate the engine core and reboot:
+
+   ```sh
+   harness/setup_engine.sh <exchange_ip>
+   harness/isolate_cores.sh 4
+   sudo reboot
+   ```
+
+3. After each boot, tune the engine host, then build the engine and XLIO:
+
+   ```sh
+   harness/tune_host.sh <interface> 2 <exchange_ip>
+   cmake --preset release && cmake --build --preset release
+   harness/build_xlio.sh
+   ```
+
+4. Run a profile from the engine host, with `--xlio` for kernel bypass. Each run saves the
+   capture and logs to the output directory and prints the paired tick-to-trade percentiles:
+
+   ```sh
+   export EXCHANGE=<user@exchange_host> INTERFACE=<interface>
+   harness/run_bench.sh normal /tmp/bench/normal-1
+   harness/run_bench.sh volatile /tmp/bench/volatile-1 --xlio
+   ```
+
+Cores 4 (engine), 2 (NIC interrupts), 6 (logger) and 1 (sniffer) are the ones used on the
+benchmark host, all on the NIC's NUMA node.
+
 ## Requirements
 
 Developed on macOS (Apple Silicon) with the following prerequisites:
@@ -200,7 +240,16 @@ Developed on macOS (Apple Silicon) with the following prerequisites:
 - OpenSSL 3, Boost
 - System `libcurl`
 
-Benchmarks run on Linux x86-64 (see *Benchmarks*).
+Benchmarks run on Linux x86-64 (Ubuntu), which needs:
+
+- GCC 13+ (for `std::format`), CMake 3.20+, Ninja
+- OpenSSL 3, Boost, libcurl
+- `libibverbs-dev` and an NVIDIA ConnectX NIC for the sniffer and kernel bypass
+
+```sh
+sudo apt-get install build-essential cmake ninja-build libssl-dev libboost-dev \
+    libcurl4-openssl-dev libibverbs-dev
+```
 
 ## Build
 
