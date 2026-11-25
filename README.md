@@ -1,6 +1,7 @@
 # C++ Low-Latency Trading Engine
 
-Low-latency spot trading engine for OKX V5 in C++20.
+Low-latency spot trading engine for OKX V5 in C++20, reaching 6.4 µs p50 and 11.7 µs p99
+wire-to-wire tick-to-trade on bare metal (see [Benchmarks](#benchmarks)).
 
 The engine maintains a live L2 order book from an incremental WebSocket feed, runs a
 strategy against it, and manages the full order lifecycle — placement, fills, cancellation,
@@ -76,26 +77,80 @@ A few design choices worth calling out:
 
 ## Benchmarks
 
-Benchmarking targets p50 and p99 tick-to-trade latency, measured on an Apple Silicon laptop
-rather than dedicated server hardware. Tick-to-trade is defined as wire arrival (socket read
-return) to the encoded order/amend bytes being queued for the socket write.
+Benchmarking targets p50 and p99 wire-to-wire tick-to-trade latency, measured on bare-metal
+server hardware. Wire-to-wire is defined as the time from a market-data packet arriving at the
+NIC to the resulting order packet leaving it, so it covers the network stack, TLS, WebSocket
+framing and the engine. The current build reaches 6.4 µs p50 and 11.7 µs p99 in a normal
+market, and 6.1 µs p50 and 8.2 µs p99 in a simulated volatile market with bursty, fast-moving
+prices.
 
-![Tick-to-trade p50 dropped from 102.4µs to 15.7µs across three optimizations](docs/latency_optimization.svg)
+![Wire-to-wire p50 dropped from 148.8µs to 6.4µs and p99 from 203.4µs to 11.7µs across seven changes](docs/latency_optimization.svg)
 
-| Configuration                    | p50      | p99     | n     |
-|----------------------------------|----------|---------|-------|
-| Baseline                         | 102.4 µs | —       | 84    |
-| + Batched bid/ask into one write | 66.6 µs  | —       | 179   |
-| + Busy-spin event loop + QoS     | 17.2 µs  | 41.5 µs | 3,691 |
-| + SBE L1 market data             | 15.7 µs  | 56.8 µs | 3,623 |
+A few things worth noting about the setup:
 
-p99 is only reported once `n` is large enough for the percentile to be statistically
-significant (roughly 2,000+ samples). Three changes got p50 numbers down by ~6.5x:
+- **Engine host**: an Oracle Cloud (OCI) BM.Optimized3.36 bare-metal server (2× Xeon Gold
+  6354, ConnectX-6 Dx) running Ubuntu. The engine thread runs on an isolated core, with NIC
+  interrupts steered to another core and the CPU governor set to `performance`.
+- **Exchange**: `harness/fake_exchange.py` runs on a separate VM and serves market data and the
+  order API over TLS WebSockets. It has two profiles: a normal market (120 s, ~1 quoting tick
+  per second) and a volatile market (60 s, fast price moves arriving in bursts, ~15 quoting
+  ticks per second).
+- **NIC timestamps**: a small RDMA sniffer on the engine host copies every packet off the
+  network card along with the card's own hardware timestamp. Each market-data tick is then
+  paired with the order packet that follows it.
+- **Engine timer**: the in-process histogram (socket read return to order bytes queued for the
+  socket write) is reported alongside, so engine time can be separated from everything else.
+- **Clock**: on x86-64, `perf/clock.hpp` reads the TSC with `rdtsc` and calibrates its
+  frequency against `std::chrono::steady_clock` at startup.
+
+| Configuration                    | Engine p50 | Engine p99 | Wire p50 | Wire p99 | Volatile wire p50 | Volatile wire p99 |
+|----------------------------------|------------|------------|----------|----------|-------------------|-------------------|
+| Baseline                         | 20.7 µs    | 38.9 µs    | 148.8 µs | 203.4 µs | 147.3 µs          | 246.6 µs          |
+| + Batched bid/ask into one write | 17.2 µs    | 17.7 µs    | 137.5 µs | 161.1 µs | 135.3 µs          | 154.8 µs          |
+| + Busy-spin event loop           | 4.5 µs     | 10.2 µs    | 19.3 µs  | 66.9 µs  | 18.3 µs           | 29.4 µs           |
+| + SBE L1 market data             | 3.1 µs     | 4.3 µs     | 17.6 µs  | 87.0 µs  | 16.4 µs           | 26.3 µs           |
+| + Cache warming                  | 3.1 µs     | 8.6 µs     | 17.3 µs  | 33.0 µs  | 16.5 µs           | 57.1 µs           |
+| + Immediate TCP ACK              | 3.0 µs     | 4.2 µs     | 15.9 µs  | 28.2 µs  | 15.0 µs           | 17.4 µs           |
+| + Hot-path cleanup               | 0.79 µs    | 1.8 µs     | 13.2 µs  | 25.3 µs  | 12.4 µs           | 26.8 µs           |
+| + Kernel bypass                  | 0.84 µs    | 1.8 µs     | 6.4 µs   | 11.7 µs  | 6.1 µs            | 8.2 µs            |
+
+Normal-market wire numbers are pooled over three runs (n=357 ticks, n=238 for busy-spin), and
+volatile numbers come from one run (n=871). Engine numbers come from the volatile run (n=1,742
+orders). At these sample sizes p99 is roughly the 4th-worst tick, so the middle rows' p99s move
+between runs (SBE's ranged from 49 µs to 87 µs), while p50s are stable.
+
+Seven changes got wire p50 numbers down by ~23x:
 
 - **Batched writes**: bid and ask amend requests go out in one socket `write()` instead of two
   separate calls, so the second no longer queues behind the first's still-in-flight send.
-- **Busy-spin + QoS**: keeping the event loop thread from ever voluntarily descheduling.
+- **Busy-spin**: the event loop polls instead of sleeping on `epoll` so a tick never waits
+  for the thread to wake up.
 - **SBE market data**: replacing JSON L2 book parsing with OKX's binary SBE L1 feed.
+- **Cache warming**: between ticks, the pipeline from market data to frame encoding runs on
+  dummy input, and the order connection sends a WebSocket ping every 20 ms. This keeps code,
+  data and the TLS/TCP send path warm.
+- **Immediate TCP ACK**: `TCP_QUICKACK` is set after each read, so ACKs go out straight away
+  instead of waiting on the kernel's delayed-ACK timer.
+- **Hot-path cleanup**: a cheaper random number generator, a reused string buffer and
+  hand-written price formatting.
+- **Kernel bypass**: NVIDIA XLIO is loaded with `LD_PRELOAD` and handles socket calls in user
+  space, with the network card writing straight into process memory.
+
+### Host tuning
+
+Each tuning setting was turned off one at a time on the kernel network stack to see what it
+was worth (normal market, three runs, n=357).
+
+| Setting removed                       | Wire p50 | Wire p99 |
+|---------------------------------------|----------|----------|
+| None (all tuning on)                  | 13.1 µs  | 20.7 µs  |
+| NIC interrupts steered off the engine | 15.3 µs  | 106.1 µs |
+| `performance` CPU governor            | 20.9 µs  | 54.1 µs  |
+| Engine pinned to an isolated core     | 16.6 µs  | 28.4 µs  |
+| Connection-tracking bypass            | 13.3 µs  | 20.8 µs  |
+
+The first row is the same build as `Hot-path cleanup` above. Its p99 differs from the table
+above due to run-to-run noise.
 
 ### Reverted optimisations
 
@@ -111,38 +166,41 @@ There were some changes that looked promising but did not hold up under measurem
 - **Darwin real-time scheduling policy** (`THREAD_TIME_CONSTRAINT_POLICY`): this was stacked
   on top of the busy-spin loop but no measurable effect was detected.
 - **Logger writer thread pinned to background QoS**: no measurable impact was seen.
+- **Linux kernel tuning on cloud VMs**: kernel busy-polling (`net.core.busy_poll`) and LTO
+  made no measurable difference to wire latency, while receive interrupts on the engine's core
+  and synchronous socket writes made p99 worse.
 
 ### Stage-by-stage breakdown
 
-![p50 and p99 latency by pipeline stage, JSON L2 book versus SBE L1 top-of-book feed](docs/latency_breakdown.svg)
-
-| Stage               | JSON L2 p50 | JSON L2 p99 | SBE L1 p50 | SBE L1 p99 |
-|---------------------|-------------|-------------|------------|------------|
-| WS decode           | 125 ns      | 1,007 ns    | 583 ns     | 2,079 ns   |
-| Book update         | 4,159 ns    | 10,879 ns   | 839 ns     | 1,823 ns   |
-| Order lookup        | 1,839 ns    | 22,271 ns   | 2,751 ns   | 38,399 ns  |
-| Rate limit check    | 167 ns      | 631 ns      | 125 ns     | 631 ns     |
-| Price format        | 125 ns      | 1,295 ns    | 375 ns     | 1,471 ns   |
-| Message build       | 1,263 ns    | 5,631 ns    | 1,375 ns   | 11,647 ns  |
-| Send (encode+write) | 2,847 ns    | 21,247 ns   | 5,695 ns   | 29,439 ns  |
+| Stage               | p50    | p99      |
+|---------------------|--------|----------|
+| WS decode           | 51 ns  | 64 ns    |
+| Book update         | 28 ns  | 51 ns    |
+| Order lookup        | 427 ns | 543 ns   |
+| Rate limit check    | 28 ns  | 60 ns    |
+| Price format        | 31 ns  | 68 ns    |
+| Message build       | 155 ns | 193 ns   |
+| Send (encode+write) | 403 ns | 551 ns   |
+| Total               | 839 ns | 1,759 ns |
 
 A few things worth noting about this table:
 
-- **L1 vs L2**: JSON L2 maintains a full 32-level order book per side while SBE only tracks
-  the L1 best bid/offer, so `Book update` being cheaper on SBE reflects both the smaller
-  workload to update the order book and faster deserialisation.
+- **Configuration**: these are from the kernel bypass build during the volatile profile
+  (n=1,742 orders).
 - **Stage boundaries**: `perf::ReadCounter()` checkpoints are threaded through the pipeline,
   so each stage gets its own histogram rather than one combined statistic. This is why stage
   percentiles don't sum to the total's.
 
 ## Requirements
 
-Developed on a macOS (Apple Silicon) with the following prerequisites:
+Developed on macOS (Apple Silicon) with the following prerequisites:
 
 - macOS 14+, arm64, Xcode Command Line Tools (Apple clang 17+ / C++20)
 - CMake 3.20+, Ninja
 - OpenSSL 3, Boost
 - System `libcurl`
+
+Benchmarks run on Linux x86-64 (see *Benchmarks*).
 
 ## Build
 
@@ -165,7 +223,7 @@ The hook rejects commits whose staged C++ files aren't clang-format clean.
 
 ## Configuration
 
-Add credentials as environmental variables.
+Add credentials as environment variables.
 
 ```sh
 export OKX_API_KEY=...
